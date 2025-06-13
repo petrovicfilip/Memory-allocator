@@ -6,6 +6,7 @@
 
 typedef struct chunk chunk;
 typedef struct heap_info heap_info;
+typedef struct mapped_region__border_arr mapped_region__border_arr; 
 
 struct chunk
 {
@@ -19,9 +20,86 @@ struct heap_info
 {
     chunk* first_free_chunk;
     size_t available;
+    void* first_region;
 };
 
-heap_info global_heap_info = { NULL, 0 };
+heap_info global_heap_info = { NULL, 0, NULL };
+
+// 16B je ovaj struktura
+struct mapped_region__border_arr
+{
+    size_t size;
+    void* next;
+};
+
+bool make_first_mapped_region(void* mem_addr, size_t total)
+{
+    void* start = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (start == MAP_FAILED)
+        return false;
+    printf("Start adr.: %p\n", start);
+    void** p = (void**)start; 
+    printf("OPREM: %p\n", p);
+
+    global_heap_info.first_region = start;
+
+    mapped_region__border_arr* fmr = (mapped_region__border_arr*)start;
+    fmr->next = NULL;
+
+    void** beg_addr = (void**)((char*)start + sizeof(mapped_region__border_arr));
+    *beg_addr = mem_addr;
+    void** end_addr = (void**)((char*)beg_addr + sizeof(void*));
+    *end_addr = (void*)((char*)mem_addr + total) ;
+    
+    fmr->size = 2;
+
+    return true;
+}
+
+bool extend_mapped_region_list(void* mem, size_t total)
+{
+    // treba opet pozvati mmap za novi region, dodati prosledjenu adresu u novi region, i dodati je na vrh lancane liste(za sad... mozda cu i na rep cu vidim)
+    void* start = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (start == MAP_FAILED)
+        return false;
+
+    mapped_region__border_arr* nmr = (mapped_region__border_arr*)start;
+    nmr->next = global_heap_info.first_region;
+    global_heap_info.first_region = start;
+
+    void** beg_addr = (void**)((char*)start + sizeof(mapped_region__border_arr));
+    *beg_addr = mem;
+    void** end_addr = (void**)((char*)beg_addr + sizeof(void*));
+    *end_addr = (void*)((char*)mem + total);
+
+    nmr->size = 2;
+    
+    return true;
+}
+
+bool add_mapped_region(void* mem_addr, size_t total)
+{
+    void* block_of_region_list = global_heap_info.first_region;
+    
+    while(block_of_region_list != NULL)
+    {
+        mapped_region__border_arr* dummy = (mapped_region__border_arr*)block_of_region_list; 
+        size_t size = dummy->size;
+        size_t max_pairs = (PAGE - sizeof(mapped_region__border_arr)) / (2 * sizeof(void*));
+        if (size < max_pairs)
+        {
+            void** beg_addr = (void**)((char*)block_of_region_list + sizeof(mapped_region__border_arr) + (size * sizeof(void*)));
+            *beg_addr = mem_addr;
+            void** end_addr = (void**)((char*)beg_addr + sizeof(void*));
+            *end_addr = (void*)((char*)mem_addr + total) ;
+            dummy->size += 2;
+            return true;
+        }
+
+        block_of_region_list = dummy->next;
+    }
+    return extend_mapped_region_list(mem_addr, total);
+}
 
 bool implemented = false;
 
@@ -44,6 +122,11 @@ void* extend_heap(size_t alloc_size, void** start)
         printf("OPA!\n");
         mem = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     }
+    if (global_heap_info.first_region == NULL)
+       make_first_mapped_region(mem, total);
+    else
+       add_mapped_region(mem, total);
+
     printf("Adresa: %p\n", mem);
     // sad se treba skrati prvi blok ako ima visak...
     size_t avail = total - sizeof(chunk);
@@ -219,12 +302,12 @@ void free_m(void* m)
         // vrv cu to da realizujem kroz staticki niz mapiranja i overhead fje provere ne bi trebalo da bude veci od 1ms, sto je ok, a u vecini slucajeva bice veoma brze
         // bice niz od 256k parova, tj 512k adresa kao tuple - (pocetna, krajnja), sto je minimum 1GB memorije (ako su sva mapiranja 4KB, a realno ako je veliki program bice veca...),
         // ali trebalo bi da zadovoljava, barem za pocetak  
-        if (!bef_chunk->used && implemented)
+        if (!bef_chunk->used  && implemented)
         {
             bef_chunk->size += chunkk->size + sizeof(chunk);
 
             chunk* next = (chunk*)((char*)bef_chunk + sizeof(chunk) + bef_chunk->size);
-            if (check_if_last_chunk())
+            if (/* check_if_last_chunk() */true)
                 next->prev_size = bef_chunk->size;
         }
     }
@@ -251,8 +334,11 @@ int main(int argc, char** argv)
     }
     for (int i = 0; i < 1000; i++)
         printf("%d\n", a[i]);
+    
+    printf("void* velicina: %ld\n", sizeof(void*));
+    //make_first_mapped_region();
+    printf("%ld", sizeof(mapped_region__border_arr));
 
     free_m(a);
     return 0;               
-
 }
