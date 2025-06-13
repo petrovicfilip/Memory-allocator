@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <sys/mman.h>
 #include <stdbool.h>
+#include <math.h>
 #define PAGE 4096
 
 typedef struct chunk chunk;
@@ -81,7 +82,7 @@ bool add_mapped_region(void* mem_addr, size_t total)
 {
     void* block_of_region_list = global_heap_info.first_region;
     
-    while(block_of_region_list != NULL)
+    while (block_of_region_list != NULL)
     {
         mapped_region__border_arr* dummy = (mapped_region__border_arr*)block_of_region_list; 
         size_t size = dummy->size;
@@ -100,6 +101,33 @@ bool add_mapped_region(void* mem_addr, size_t total)
     }
     return extend_mapped_region_list(mem_addr, total);
 }
+
+bool chunk_is_last_in_region(chunk* block)
+{
+    void* chunk_addr = (void*)block;
+    void* block_of_region_list = global_heap_info.first_region;
+
+    while (block_of_region_list != NULL)
+    {
+        mapped_region__border_arr* dummy = (mapped_region__border_arr*)block_of_region_list; 
+        size_t size = dummy->size;
+        void** a1 = (void**)((char*)block_of_region_list + sizeof(mapped_region__border_arr));
+        for (int i = 0; i < size; i += 2)
+        {
+            void** a2 = (void**)((char*)a1 + sizeof(void*));
+            if (chunk_addr >= *a1 && chunk_addr < *a2)
+            {
+                void* end_of_block = (void*)((char*)chunk_addr + sizeof(chunk) + block->size);
+                return end_of_block == *a2;
+            }
+            a1 = (void**)((char*)a2 + sizeof(void*));
+        }
+        block_of_region_list = dummy->next;
+    }
+    // za sigurnost, nikad ne bi trebalo da dodje do ovde...
+    return false;
+}
+
 
 bool implemented = false;
 
@@ -292,26 +320,27 @@ void free_m(void* m)
     chunk* chunkk = (chunk*)chunk_addr;
     chunkk->used = false;
 
-
     // coalescing/spajanje sa prethodnim blokom ako je free...
     if (chunkk->prev_size > 0)
     {
         void* bef_chunk_addr = (char*)chunk_addr - chunkk->prev_size - sizeof(chunk);
         chunk* bef_chunk = (chunk*)bef_chunk_addr;
         // treba dodati i proveru da li je zadnji blok u delu mapirane memorije
-        // vrv cu to da realizujem kroz staticki niz mapiranja i overhead fje provere ne bi trebalo da bude veci od 1ms, sto je ok, a u vecini slucajeva bice veoma brze
-        // bice niz od 256k parova, tj 512k adresa kao tuple - (pocetna, krajnja), sto je minimum 1GB memorije (ako su sva mapiranja 4KB, a realno ako je veliki program bice veca...),
-        // ali trebalo bi da zadovoljava, barem za pocetak  
-        if (!bef_chunk->used  && implemented)
+        if (!bef_chunk->used)
         {
             bef_chunk->size += chunkk->size + sizeof(chunk);
 
-            chunk* next = (chunk*)((char*)bef_chunk + sizeof(chunk) + bef_chunk->size);
-            if (/* check_if_last_chunk() */true)
+            if (!chunk_is_last_in_region(chunkk))
+            {
+                chunk* next = (chunk*)((char*)bef_chunk + sizeof(chunk) + bef_chunk->size);
                 next->prev_size = bef_chunk->size;
+                global_heap_info.available += sizeof(chunk) + chunkk->size;
+                // blok iza je free sto znaci da je vec u free-listi pa odma return
+                return;
+            }
         }
     }
-
+    global_heap_info.available += chunkk->size;
     chunkk->next_free = global_heap_info.first_free_chunk;
     global_heap_info.first_free_chunk = chunkk;
     //printf("Velicina: %ld\n", chunkk->size);
@@ -325,20 +354,70 @@ int main(int argc, char** argv)
     //extend_heap(4047, &start);
     // printf("Dostupna memorija heapa -> %ld, Adresa prvog bloka -> %p, Velicina -1 bloka %ld\n", 
     //     global_heap_info.available, global_heap_info.first_free_chunk, global_heap_info.first_free_chunk->prev_size);
-    int* a = (int*)alloc_m(sizeof(int) * 1000);
-    int s = 0;
-    for (int i = 0; i < 1000; i++)
-    {
-        a[i] = s;
-        s++;
-    }
-    for (int i = 0; i < 1000; i++)
-        printf("%d\n", a[i]);
+    int** a = (int**)alloc_m(sizeof(int*) * 100);
+    for (int i = 0; i < 100; i++)
+        a[i] = (int*)alloc_m(sizeof(int) * 50);
     
-    printf("void* velicina: %ld\n", sizeof(void*));
-    //make_first_mapped_region();
-    printf("%ld", sizeof(mapped_region__border_arr));
+    int** b = (int**)alloc_m(sizeof(int*) * 50);
+    for (int i = 0; i < 50; i++)
+        b[i] = (int*)alloc_m(sizeof(int) * 100);
+    
+    int k = 542;
+    for (int i = 0; i < 100; i++)
+    {
+        for (int j = 0; j < 50; j++)
+        {
+            a[i][j] = (k + 12345) % 228;
+            k = a[i][j];
+        } 
+    }
 
+    for (int i = 0; i < 50; i++)
+    {
+        for (int j = 0; j < 100; j++)
+        {
+            b[i][j] = (k + 12345) % 228;
+            k = b[i][j];
+        } 
+    }
+
+    int** c = (int**)alloc_m(sizeof(int*) * 100);
+    for (int i = 0; i < 100; i++)
+        c[i] = (int*)alloc_m(sizeof(int) * 100);
+
+    for (int i = 0; i < 100; i++)
+        for (int j = 0; j < 100; j++)
+        {
+            int s = 0;
+            for (int k = 0; k < 50; k++)
+            {
+                s += a[i][k] * b[k][j]; 
+            }
+            c[i][j] = s;
+        }    
+
+    for (int i = 0; i < 100; i++)
+    {
+        for (int j = 0; j < 100; j++)
+            printf("%d ", c[i][j]);
+        printf("\n");  
+    }
+
+    for (int i = 0; i < 100; i++)
+        free_m(a[i]);
     free_m(a);
+
+    for (int i = 0; i < 50; i++)
+        free_m(b[i]);
+    free_m(b);
+
+    for (int i = 0; i < 100; i++)
+        free_m(c[i]);
+    free_m(c);
+
+    printf("void* velicina: %ld\n", sizeof(void*));
+    printf("%ld\n", sizeof(mapped_region__border_arr));
+
+    //free_m(a);
     return 0;               
 }
