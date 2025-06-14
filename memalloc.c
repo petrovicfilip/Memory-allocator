@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <sys/mman.h>
 #include <stdbool.h>
-#include <math.h>
 #define PAGE 4096
 
 typedef struct chunk chunk;
@@ -39,8 +38,8 @@ bool make_first_mapped_region(void* mem_addr, size_t total)
     if (start == MAP_FAILED)
         return false;
     printf("Start adr.: %p\n", start);
-    void** p = (void**)start; 
-    printf("OPREM: %p\n", p);
+    void** e = (void**)((char*)start + PAGE); 
+    printf("End adr: %p\n", e);
 
     global_heap_info.first_region = start;
 
@@ -131,14 +130,14 @@ bool chunk_is_last_in_region(chunk* block)
 
 bool implemented = false;
 
-// alloc_m ce da zove kad nema vise memorije na heap-u
+// alloc_mem ce da zove kad nema vise memorije na heap-u
 void* extend_heap(size_t alloc_size, void** start)
 {
     void* mem;
     size_t heap_size;
     size_t total = alloc_size + sizeof(chunk);
 
-    if (total <= PAGE)
+    if (total < PAGE)
     {
         total = PAGE;
         mem = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -213,7 +212,7 @@ void* extend_heap(size_t alloc_size, void** start)
     // }
 }
 
-void* alloc_m(size_t size)
+void* alloc_mem(size_t size)
 {
     if (global_heap_info.available < size)
     {
@@ -253,36 +252,36 @@ void* alloc_m(size_t size)
         size_t leftover = appropriate->size - size;
         
         // NAPISATI LEPSE ZA SAD OVAKO !!!!!!!!!!!!!!!!!!
-        if (leftover > 0) // u buducnosti ce vrv biti 0 zamenjena sa MINIMUM_BLOCK_SIZE da ne dobijam blokove velicine svega nekoliko bajtova...
+        if (leftover > sizeof(chunk)) // provera da li je moguce truncovati blok, p.s. ubaciti minimum_block_size da ne dobijam useless blokovi od par bajta
         {
             chunk* next_free = appropriate->next_free;
-            appropriate->next_free = NULL;
+            appropriate->next_free = NULL; // ni ne mora al neka ga bmk...
             appropriate->used = true;
             appropriate->size = size;
             void* new_block_start = (char*)appropriate + sizeof(chunk) + size;
             bef->next_free = (chunk*)new_block_start;
             chunk* nb = (chunk*)new_block_start;
             nb->next_free = next_free;
-            nb->size = leftover;
+            nb->size = leftover - sizeof(chunk);
             nb->used = false;
             nb->prev_size = size;
-            global_heap_info.available -= size + sizeof(chunk);
+            global_heap_info.available -= (size + (sizeof(chunk)));
         }
         else
         {
             chunk* next_free = appropriate->next_free;
             appropriate->next_free = NULL;
             appropriate->used = true;
-            appropriate->size = size;
+            //appropriate->size = size;
             bef->next_free = next_free;
-            global_heap_info.available -= size + sizeof(chunk);
+            global_heap_info.available -= (size + leftover); // nema + sizeof(chunk) jer ga ceo zauzimamo i dolazi do unutrasnje fragmentacije
         }
 
     }
     else
     {
         size_t leftover = appropriate->size - size;
-        if (leftover > 0) // u buducnosti ce vrv biti 0 zamenjena sa MINIMUM_BLOCK_SIZE da ne dobijam blokove velicine svega nekoliko bajtova...
+        if (leftover > sizeof(chunk)) // u buducnosti ce vrv biti 0 zamenjena sa MINIMUM_BLOCK_SIZE da ne dobijam blokove velicine svega nekoliko bajtova...
         {
             chunk* next_free = appropriate->next_free;
             appropriate->next_free = NULL;
@@ -291,27 +290,41 @@ void* alloc_m(size_t size)
             void* new_block_start = (char*)appropriate + sizeof(chunk) + size;
             global_heap_info.first_free_chunk = (chunk*)new_block_start;
             chunk* nb = (chunk*)new_block_start;
+            void* nf = (void*)(nb->next_free);
             nb->next_free = next_free;
-            nb->size = leftover;
+            nb->size = leftover - sizeof(chunk); // ovde sam bio stavio samo leftover i crko debagirajuci kad sam bilmez... 
             nb->used = false;
             nb->prev_size = size;
-            global_heap_info.available -= size + sizeof(chunk);
+            global_heap_info.available -= (size + (sizeof(chunk)));
         }
         else
         {
             chunk* next_free = appropriate->next_free;
             appropriate->next_free = NULL;
             appropriate->used = true;
-            appropriate->size = size;
+            //appropriate->size = size;
             global_heap_info.first_free_chunk = next_free;
-            global_heap_info.available -= size + sizeof(chunk);
+            global_heap_info.available -= (size + leftover);
         }
     }
     void* ret_addr = (char*)appropriate + sizeof(chunk);
     return (void*)ret_addr;
 }
 
-void free_m(void* m)
+void* alloc_mem_zero(size_t size)
+{
+    void* mem =  alloc_mem(size);
+    if (mem)
+    {
+        char* mem_byte = (char*)mem;
+        for (int i = 0; i < size; i++)
+            mem_byte[i] = 0;
+    }
+        //memset(mem, 0, size); treba mi string.h za ovo, paralelno je i optimalnije, al yolo
+    return mem;
+}
+
+void free_mem(void* m)
 {
     if (m == NULL)
         return;
@@ -347,20 +360,15 @@ void free_m(void* m)
     return;
 }
 
-int main(int argc, char** argv)
+bool test1()
 {
-    printf("%ld\n",sizeof(chunk));
-    void* start = NULL;
-    //extend_heap(4047, &start);
-    // printf("Dostupna memorija heapa -> %ld, Adresa prvog bloka -> %p, Velicina -1 bloka %ld\n", 
-    //     global_heap_info.available, global_heap_info.first_free_chunk, global_heap_info.first_free_chunk->prev_size);
-    int** a = (int**)alloc_m(sizeof(int*) * 100);
+    int** a = (int**)alloc_mem(sizeof(int*) * 100);
     for (int i = 0; i < 100; i++)
-        a[i] = (int*)alloc_m(sizeof(int) * 50);
+        a[i] = (int*)alloc_mem(sizeof(int) * 50);
     
-    int** b = (int**)alloc_m(sizeof(int*) * 50);
+    int** b = (int**)alloc_mem(sizeof(int*) * 50);
     for (int i = 0; i < 50; i++)
-        b[i] = (int*)alloc_m(sizeof(int) * 100);
+        b[i] = (int*)alloc_mem(sizeof(int) * 100);
     
     int k = 542;
     for (int i = 0; i < 100; i++)
@@ -381,9 +389,9 @@ int main(int argc, char** argv)
         } 
     }
 
-    int** c = (int**)alloc_m(sizeof(int*) * 100);
+    int** c = (int**)alloc_mem(sizeof(int*) * 100);
     for (int i = 0; i < 100; i++)
-        c[i] = (int*)alloc_m(sizeof(int) * 100);
+        c[i] = (int*)alloc_mem(sizeof(int) * 100);
 
     for (int i = 0; i < 100; i++)
         for (int j = 0; j < 100; j++)
@@ -404,20 +412,36 @@ int main(int argc, char** argv)
     }
 
     for (int i = 0; i < 100; i++)
-        free_m(a[i]);
-    free_m(a);
+        free_mem(a[i]);
+    free_mem(a);
 
     for (int i = 0; i < 50; i++)
-        free_m(b[i]);
-    free_m(b);
+        free_mem(b[i]);
+    free_mem(b);
 
     for (int i = 0; i < 100; i++)
-        free_m(c[i]);
-    free_m(c);
+        free_mem(c[i]);
+    free_mem(c);
 
-    printf("void* velicina: %ld\n", sizeof(void*));
-    printf("%ld\n", sizeof(mapped_region__border_arr));
+    return true;
+}
 
-    //free_m(a);
+bool test2()
+{
+
+}
+
+int main(int argc, char** argv)
+{
+    //printf("%ld\n",sizeof(chunk));
+    //void* start = NULL;
+    //extend_heap(4047, &start);
+    // printf("Dostupna memorija heapa -> %ld, Adresa prvog bloka -> %p, Velicina -1 bloka %ld\n", 
+    //     global_heap_info.available, global_heap_info.first_free_chunk, global_heap_info.first_free_chunk->prev_size);
+    test1();
+    
+    //printf("void* velicina: %ld\n", sizeof(void*));
+    //printf("%ld\n", sizeof(mapped_region__border_arr));
+    printf("POZDRAV!\n");
     return 0;               
 }
