@@ -32,14 +32,25 @@ struct mapped_region__border_arr
     void* next;
 };
 
+void print_free_blocks()
+{
+    chunk* block = global_heap_info.first_free_chunk;
+    while (block)
+    {
+        printf("|| size: %ld, prevsize: %ld, used: %d || -> ", block->size, block->prev_size, block->used);
+        block = block->next_free;
+    }
+    printf("NULL\n");
+}
+
 bool make_first_mapped_region(void* mem_addr, size_t total)
 {
     void* start = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (start == MAP_FAILED)
         return false;
-    printf("Start adr.: %p\n", start);
+    //printf("Start adr.: %p\n", start);
     void** e = (void**)((char*)start + PAGE); 
-    printf("End adr: %p\n", e);
+    //printf("End adr: %p\n", e);
 
     global_heap_info.first_region = start;
 
@@ -146,7 +157,7 @@ void* extend_heap(size_t alloc_size, void** start)
     {
         total = ((total + PAGE - 1) / PAGE) * PAGE;
 
-        printf("OPA!\n");
+        //printf("OPA!\n");
         mem = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     }
     if (global_heap_info.first_region == NULL)
@@ -154,14 +165,14 @@ void* extend_heap(size_t alloc_size, void** start)
     else
        add_mapped_region(mem, total);
 
-    printf("Adresa: %p\n", mem);
+    //printf("Adresa: %p\n", mem);
     // sad se treba skrati prvi blok ako ima visak...
     size_t avail = total - sizeof(chunk);
     int leftover = total - alloc_size - (sizeof(chunk) << 1);
-    printf("leftover: %d\n", leftover);
+    //printf("leftover: %d\n", leftover);
     if (leftover > 0)
     {
-        printf("Ostalo: %ld\n", total - alloc_size - sizeof(chunk));
+        //printf("Ostalo: %ld\n", total - alloc_size - sizeof(chunk));
         void* new_free = (char*)mem + sizeof(chunk) + alloc_size;
         chunk* first = (chunk*)mem;
         first->used = true;
@@ -196,6 +207,8 @@ void* extend_heap(size_t alloc_size, void** start)
         *start = (void*)((char*)mem + sizeof(chunk));
         // ovaj blok zauzima ceo mmap() prostor, pa sam po sebi ne moze da ima sledbenika niti ce moci da se coalescuje...
     }
+    //printf("Ostalo memorije na heap-u: %ld\n", global_heap_info.available);
+    //print_free_blocks();
 
     // if (global_heap_info.first_free_chunk == NULL)
     // {
@@ -307,6 +320,8 @@ void* alloc_mem(size_t size)
             global_heap_info.available -= (size + leftover);
         }
     }
+    //printf("Ostalo memorije na heap-u: %ld\n", global_heap_info.available);
+    //print_free_blocks();
     void* ret_addr = (char*)appropriate + sizeof(chunk);
     return (void*)ret_addr;
 }
@@ -339,6 +354,7 @@ void free_mem(void* m)
         void* bef_chunk_addr = (char*)chunk_addr - chunkk->prev_size - sizeof(chunk);
         chunk* bef_chunk = (chunk*)bef_chunk_addr;
         // treba dodati i proveru da li je zadnji blok u delu mapirane memorije
+        // mozda cu dodati u buducnosti i coalescing sa narednim blokom, ali nije neophodno...
         if (!bef_chunk->used)
         {
             bef_chunk->size += chunkk->size + sizeof(chunk);
@@ -347,7 +363,10 @@ void free_mem(void* m)
             {
                 chunk* next = (chunk*)((char*)bef_chunk + sizeof(chunk) + bef_chunk->size);
                 next->prev_size = bef_chunk->size;
-                global_heap_info.available += sizeof(chunk) + chunkk->size;
+                global_heap_info.available += sizeof(chunk) + chunkk->size;  
+
+                //printf("Ostalo memorije na heap-u: %ld\n", global_heap_info.available);
+                //print_free_blocks();
                 // blok iza je free sto znaci da je vec u free-listi pa odma return
                 return;
             }
@@ -357,69 +376,70 @@ void free_mem(void* m)
     chunkk->next_free = global_heap_info.first_free_chunk;
     global_heap_info.first_free_chunk = chunkk;
     //printf("Velicina: %ld\n", chunkk->size);
+    //printf("Ostalo memorije na heap-u: %ld\n", global_heap_info.available);
+    //print_free_blocks();
     return;
 }
-
-bool test1()
+bool test1(int m, int n, int o)
 {
-    int** a = (int**)alloc_mem(sizeof(int*) * 100);
-    for (int i = 0; i < 100; i++)
-        a[i] = (int*)alloc_mem(sizeof(int) * 50);
+    int** a = (int**)alloc_mem(sizeof(int*) * m);
+    for (int i = 0; i < m; i++)
+        a[i] = (int*)alloc_mem(sizeof(int) * n);
     
-    int** b = (int**)alloc_mem(sizeof(int*) * 50);
-    for (int i = 0; i < 50; i++)
-        b[i] = (int*)alloc_mem(sizeof(int) * 100);
+    int** b = (int**)alloc_mem(sizeof(int*) * n);
+    for (int i = 0; i < n; i++)
+        b[i] = (int*)alloc_mem(sizeof(int) * o);
     
     int k = 542;
-    for (int i = 0; i < 100; i++)
+    for (int i = 0; i < m; i++)
     {
-        for (int j = 0; j < 50; j++)
+        for (int j = 0; j < n; j++)
         {
             a[i][j] = (k + 12345) % 228;
             k = a[i][j];
         } 
     }
 
-    for (int i = 0; i < 50; i++)
+    for (int i = 0; i < n; i++)
     {
-        for (int j = 0; j < 100; j++)
+        for (int j = 0; j < o; j++)
         {
             b[i][j] = (k + 12345) % 228;
             k = b[i][j];
         } 
     }
 
-    int** c = (int**)alloc_mem(sizeof(int*) * 100);
-    for (int i = 0; i < 100; i++)
-        c[i] = (int*)alloc_mem(sizeof(int) * 100);
+    int** c = (int**)alloc_mem(sizeof(int*) * m);
+    for (int i = 0; i < m; i++)
+        c[i] = (int*)alloc_mem(sizeof(int) * o);
 
-    for (int i = 0; i < 100; i++)
-        for (int j = 0; j < 100; j++)
+    for (int i = 0; i < m; i++)
+        for (int j = 0; j < o; j++)
         {
             int s = 0;
-            for (int k = 0; k < 50; k++)
+            for (int k = 0; k < n; k++)
             {
                 s += a[i][k] * b[k][j]; 
             }
             c[i][j] = s;
         }    
 
-    for (int i = 0; i < 100; i++)
+    for (int i = 0; i < m; i++)
     {
-        for (int j = 0; j < 100; j++)
+        for (int j = 0; j < o; j++)
             printf("%d ", c[i][j]);
         printf("\n");  
     }
 
-    for (int i = 0; i < 100; i++)
+    for (int i = 0; i < m; i++)
         free_mem(a[i]);
     free_mem(a);
 
-    for (int i = 0; i < 50; i++)
+    for (int i = 0; i < n; i++)
         free_mem(b[i]);
     free_mem(b);
 
-    for (int i = 0; i < 100; i++)
+    for (int i = 0; i < m; i++)
         free_mem(c[i]);
     free_mem(c);
 
@@ -428,20 +448,56 @@ bool test1()
 
 bool test2()
 {
+    void  *a, *b, *c, *d, *e, *f, *g, *h, *i, *j, *k;
 
+    a = alloc_mem(1000);
+    b = alloc_mem(200);
+    c = alloc_mem(53);
+    d = alloc_mem(18);
+    e = alloc_mem(37);
+    f = alloc_mem(127);
+    g = alloc_mem(127);
+    h = alloc_mem(50);
+    i = alloc_mem(32);
+
+    j = alloc_mem(5000);
+    k = alloc_mem(4000);
+
+    free_mem(g);
+    free_mem(c);
+    free_mem(d);
+    free_mem(e);
+
+    free_mem(a);
+    free_mem(b);
+    free_mem(f);
+
+    free_mem(h);
+    free_mem(i);
+    free_mem(j);
+    free_mem(k);
+
+    return true;    
+}
+
+bool test3()
+{
+    int* a = alloc_mem_zero(10000 * sizeof(int));
+    for (int i = 0; i < 10000; i++)
+        printf("%d ", a[i]);
+    return true ;
 }
 
 int main(int argc, char** argv)
 {
-    //printf("%ld\n",sizeof(chunk));
-    //void* start = NULL;
-    //extend_heap(4047, &start);
-    // printf("Dostupna memorija heapa -> %ld, Adresa prvog bloka -> %p, Velicina -1 bloka %ld\n", 
-    //     global_heap_info.available, global_heap_info.first_free_chunk, global_heap_info.first_free_chunk->prev_size);
-    test1();
     
     //printf("void* velicina: %ld\n", sizeof(void*));
     //printf("%ld\n", sizeof(mapped_region__border_arr));
+    
+    test1(1000, 1000, 1000);
+    // test2();
+    // test3();
+    
     printf("POZDRAV!\n");
     return 0;               
 }
