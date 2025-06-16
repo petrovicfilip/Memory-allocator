@@ -1,6 +1,7 @@
 #ifdef _WIN32
     #include <windows.h>
     #include <stdio.h>
+    #include <stdbool.h>
 #else
     #define _GNU_SOURCE
     #include <sys/mman.h>
@@ -68,8 +69,13 @@ void print_free_blocks()
 bool make_first_mapped_region(void* mem_addr, size_t total)
 {
     void* start = map_memory(PAGE);
+    #ifdef _WIN32
+    if (start == NULL)
+        return false;
+    #else
     if (start == MAP_FAILED)
         return false;
+    #endif
     //printf("Start adr.: %p\n", start);
     void** e = (void**)((char*)start + PAGE); 
     //printf("End adr: %p\n", e);
@@ -93,8 +99,13 @@ bool extend_mapped_region_list(void* mem, size_t total)
 {
     // treba opet pozvati mmap za novi region, dodati prosledjenu adresu u novi region, i dodati je na vrh lancane liste(za sad... mozda cu i na rep cu vidim)
     void* start = map_memory(PAGE);
+    #ifdef _WIN32
+    if (start == NULL)
+        return false;
+    #else
     if (start == MAP_FAILED)
         return false;
+    #endif
 
     mapped_region__border_arr* nmr = (mapped_region__border_arr*)start;
     nmr->next = global_heap_info.first_region;
