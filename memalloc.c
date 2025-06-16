@@ -1,7 +1,13 @@
-#define _GNU_SOURCE
-#include <stdio.h>
-#include <sys/mman.h>
-#include <stdbool.h>
+#ifdef _WIN32
+    #include <windows.h>
+    #include <stdio.h>
+#else
+    #define _GNU_SOURCE
+    #include <sys/mman.h>
+    #include <stdio.h>
+    #include <stdbool.h>
+#endif
+
 #define PAGE 4096
 
 typedef struct chunk chunk;
@@ -32,6 +38,22 @@ struct mapped_region__border_arr
     void* next;
 };
 
+void* map_memory(size_t total) {
+#ifdef _WIN32
+    return VirtualAlloc(NULL, total, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+#else
+    return mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#endif
+}
+
+void unmap_memory(void* addr, size_t total) {
+#ifdef _WIN32
+    VirtualFree(addr, 0, MEM_RELEASE);
+#else
+    munmap(addr, total);
+#endif
+}
+
 void print_free_blocks()
 {
     chunk* block = global_heap_info.first_free_chunk;
@@ -45,7 +67,7 @@ void print_free_blocks()
 
 bool make_first_mapped_region(void* mem_addr, size_t total)
 {
-    void* start = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* start = map_memory(PAGE);
     if (start == MAP_FAILED)
         return false;
     //printf("Start adr.: %p\n", start);
@@ -70,7 +92,7 @@ bool make_first_mapped_region(void* mem_addr, size_t total)
 bool extend_mapped_region_list(void* mem, size_t total)
 {
     // treba opet pozvati mmap za novi region, dodati prosledjenu adresu u novi region, i dodati je na vrh lancane liste(za sad... mozda cu i na rep cu vidim)
-    void* start = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* start = map_memory(PAGE);
     if (start == MAP_FAILED)
         return false;
 
@@ -175,14 +197,14 @@ void* extend_heap(size_t alloc_size, void** start)
     if (total < PAGE)
     {
         total = PAGE;
-        mem = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        mem = map_memory(PAGE);
     }
     else
     {
         total = ((total + PAGE - 1) / PAGE) * PAGE;
 
         //printf("OPA!\n");
-        mem = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        mem = map_memory(total);
     }
     if (global_heap_info.first_region == NULL)
        make_first_mapped_region(mem, total);
@@ -392,6 +414,80 @@ bool copy_mem_to_block(chunk* dest, chunk* src)
     return true;
 }
 
+void free_mem(void* m)
+{
+    if (m == NULL)
+        return;
+    // chunk postaje free i dodaje se na vrh liste free blokova, posle odraditi coalescing sa prethodnim blokom...
+    void* chunk_addr = (char*)m - sizeof(chunk);
+    chunk* chunkk = (chunk*)chunk_addr;
+
+    if (!chunkk->used)
+        return;
+    chunkk->used = false;
+
+    // coalescing/spajanje sa prethodnim blokom ako je free...
+    if (chunkk->prev_size > 0)
+    {
+        void* bef_chunk_addr = (char*)chunk_addr - chunkk->prev_size - sizeof(chunk);
+        chunk* bef_chunk = (chunk*)bef_chunk_addr;
+        // treba dodati i proveru da li je zadnji blok u delu mapirane memorije
+        // mozda cu dodati u buducnosti i coalescing sa narednim blokom, ali nije neophodno...
+        if (!bef_chunk->used)
+        {
+            bef_chunk->size += chunkk->size + sizeof(chunk);
+
+            // prvi je, proveravamo velicinu, ako je ceo mapirani segment vracamo memoriju OS-u
+            if (bef_chunk->prev_size == 0)
+            {
+                size_t mss = mapped_segment_size(bef_chunk_addr);
+                if (bef_chunk->size == mss - sizeof(chunk))
+                {
+                    chunk* bef_free = find_free_predecessor(bef_chunk); 
+                    if (bef_free)
+                        bef_free->next_free = bef_chunk->next_free;
+                    else
+                        global_heap_info.first_free_chunk = bef_chunk->next_free; // NULL
+                    unmap_memory(bef_chunk_addr, mss);
+                    global_heap_info.available -= bef_chunk->size;
+                    return;
+                }
+            }
+
+            if (!chunk_is_last_in_region(chunkk))
+            {
+                chunk* next = (chunk*)((char*)bef_chunk + sizeof(chunk) + bef_chunk->size);
+                next->prev_size = bef_chunk->size;
+                global_heap_info.available += sizeof(chunk) + chunkk->size;  
+
+                //printf("Ostalo memorije na heap-u: %ld\n", global_heap_info.available);
+                //print_free_blocks();
+                // blok iza je free sto znaci da je vec u free-listi pa odma return
+                return;
+            }
+        }
+    }
+    size_t mss = mapped_segment_size(chunk_addr);
+    if (chunkk->size == mss - sizeof(chunk))
+    {
+        chunk* bef_free = find_free_predecessor(chunkk);
+        if (bef_free)
+            bef_free->next_free = chunkk->next_free;
+        else
+            global_heap_info.first_free_chunk = chunkk->next_free; // NULL
+        unmap_memory(chunk_addr, mss);
+        global_heap_info.available -= chunkk->size;
+        return;
+    }
+    global_heap_info.available += chunkk->size;
+    chunkk->next_free = global_heap_info.first_free_chunk;
+    global_heap_info.first_free_chunk = chunkk;
+    //printf("Velicina: %ld\n", chunkk->size);
+    //printf("Ostalo memorije na heap-u: %ld\n", global_heap_info.available);
+    //print_free_blocks();
+    return;
+}
+
 void* realloc_mem(void* mem, size_t new_size)
 {
     if (mem == NULL)
@@ -399,7 +495,7 @@ void* realloc_mem(void* mem, size_t new_size)
     
     if (new_size == 0)
     {
-        free(mem);
+        free_mem(mem);
         return NULL;
     }
 
@@ -445,79 +541,6 @@ void* realloc_mem(void* mem, size_t new_size)
     }
 }
 
-void free_mem(void* m)
-{
-    if (m == NULL)
-        return;
-    // chunk postaje free i dodaje se na vrh liste free blokova, posle odraditi coalescing sa prethodnim blokom...
-    void* chunk_addr = (char*)m - sizeof(chunk);
-    chunk* chunkk = (chunk*)chunk_addr;
-
-    if (!chunkk->used)
-        return;
-    chunkk->used = false;
-
-    // coalescing/spajanje sa prethodnim blokom ako je free...
-    if (chunkk->prev_size > 0)
-    {
-        void* bef_chunk_addr = (char*)chunk_addr - chunkk->prev_size - sizeof(chunk);
-        chunk* bef_chunk = (chunk*)bef_chunk_addr;
-        // treba dodati i proveru da li je zadnji blok u delu mapirane memorije
-        // mozda cu dodati u buducnosti i coalescing sa narednim blokom, ali nije neophodno...
-        if (!bef_chunk->used)
-        {
-            bef_chunk->size += chunkk->size + sizeof(chunk);
-
-            // prvi je, proveravamo velicinu, ako je ceo mapirani segment vracamo memoriju OS-u
-            if (bef_chunk->prev_size == 0)
-            {
-                size_t mss = mapped_segment_size(bef_chunk_addr);
-                if (bef_chunk->size == mss - sizeof(chunk))
-                {
-                    chunk* bef_free = find_free_predecessor(bef_chunk); 
-                    if (bef_free)
-                        bef_free->next_free = bef_chunk->next_free;
-                    else
-                        global_heap_info.first_free_chunk = bef_chunk->next_free; // NULL
-                    munmap(bef_chunk_addr, mss);
-                    global_heap_info.available -= bef_chunk->size;
-                    return;
-                }
-            }
-
-            if (!chunk_is_last_in_region(chunkk))
-            {
-                chunk* next = (chunk*)((char*)bef_chunk + sizeof(chunk) + bef_chunk->size);
-                next->prev_size = bef_chunk->size;
-                global_heap_info.available += sizeof(chunk) + chunkk->size;  
-
-                //printf("Ostalo memorije na heap-u: %ld\n", global_heap_info.available);
-                //print_free_blocks();
-                // blok iza je free sto znaci da je vec u free-listi pa odma return
-                return;
-            }
-        }
-    }
-    size_t mss = mapped_segment_size(chunk_addr);
-    if (chunkk->size == mss - sizeof(chunk))
-    {
-        chunk* bef_free = find_free_predecessor(chunkk);
-        if (bef_free)
-            bef_free->next_free = chunkk->next_free;
-        else
-            global_heap_info.first_free_chunk = chunkk->next_free; // NULL
-        munmap(chunk_addr, mss);
-        global_heap_info.available -= chunkk->size;
-        return;
-    }
-    global_heap_info.available += chunkk->size;
-    chunkk->next_free = global_heap_info.first_free_chunk;
-    global_heap_info.first_free_chunk = chunkk;
-    //printf("Velicina: %ld\n", chunkk->size);
-    //printf("Ostalo memorije na heap-u: %ld\n", global_heap_info.available);
-    //print_free_blocks();
-    return;
-}
 bool test1(int m, int n, int o)
 {
     int** a = (int**)alloc_mem(sizeof(int*) * m);
@@ -633,8 +656,8 @@ int main(int argc, char** argv)
     //printf("%ld\n", sizeof(mapped_region__border_arr));
     
     test1(1000, 1000, 1000);
-    // test2();
-    // test3();
+    test2();
+    test3();
     
     printf("POZDRAV!\n");
     return 0;               
