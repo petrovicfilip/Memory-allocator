@@ -1,13 +1,4 @@
-#ifdef _WIN32
-    #include <windows.h>
-    #include <stdio.h>
-    #include <stdbool.h>
-#else
-    #define _GNU_SOURCE
-    #include <sys/mman.h>
-    #include <stdio.h>
-    #include <stdbool.h>
-#endif
+#include "memalloc.h"
 
 #define PAGE 4096
 
@@ -60,10 +51,10 @@ void print_free_blocks()
     chunk* block = global_heap_info.first_free_chunk;
     while (block)
     {
-        printf("|| size: %ld, prevsize: %ld, used: %d || -> ", block->size, block->prev_size, block->used);
+        //printf("|| size: %ld, prevsize: %ld, used: %d || -> ", block->size, block->prev_size, block->used);
         block = block->next_free;
     }
-    printf("NULL\n");
+    //printf("NULL\n");
 }
 
 bool make_first_mapped_region(void* mem_addr, size_t total)
@@ -255,7 +246,7 @@ void* extend_heap(size_t alloc_size, void** start)
     else
     { // ovde dolazi do unutrasnje fragmentacije jer imamo 32 ili manje bajta ostalo sto je =< header, pa je beskoristan prostor 
       // ali to je za specificne alokacije i <= 32 bajta, tako da nije strasno...
-        printf("NULL BURAZERU!!!\n");
+        //printf("NULL BURAZERU!!!\n");
         chunk* first = (chunk*)mem;  
         first->used = true;
         first->prev_size = 0;
@@ -264,22 +255,6 @@ void* extend_heap(size_t alloc_size, void** start)
         *start = (void*)((char*)mem + sizeof(chunk));
         // ovaj blok zauzima ceo mmap() prostor, pa sam po sebi ne moze da ima sledbenika niti ce moci da se coalescuje...
     }
-    //printf("Ostalo memorije na heap-u: %ld\n", global_heap_info.available);
-    //print_free_blocks();
-
-    // if (global_heap_info.first_free_chunk == NULL)
-    // {
-    //     // inicijalizacija heap-a
-    //     global_heap_info.first_free_chunk = (chunk*)mem;
-    //     global_heap_info.available = total - sizeof(chunk); // alloc_size
-    //     global_heap_info.first_free_chunk->prev_size = 0;
-    //     global_heap_info.first_free_chunk->used = false; // true
-    //     global_heap_info.first_free_chunk->next_free = NULL;
-    // }
-    // else
-    // {
-    //     // TODO
-    // }
 }
 
 void* alloc_mem(size_t size)
@@ -598,9 +573,9 @@ bool test1(int m, int n, int o)
 
     for (int i = 0; i < m; i++)
     {
-        for (int j = 0; j < o; j++)
-            printf("%d ", c[i][j]);
-        printf("\n");  
+        for (int j = 0; j < o; j++);
+            //printf("%d ", c[i][j]);
+        //printf("\n");  
     }
 
     for (int i = 0; i < m; i++)
@@ -655,9 +630,9 @@ bool test2()
 bool test3()
 {
     int* a = alloc_mem_zero(10000 * sizeof(int));
-    for (int i = 0; i < 10000; i++)
-        printf("%d ", a[i]);
-    return true ;
+    for (int i = 0; i < 10000; i++);
+        //printf("%d ", a[i]);
+    return true;
 }
 
 int main(int argc, char** argv)
@@ -670,6 +645,6 @@ int main(int argc, char** argv)
     test2();
     test3();
     
-    printf("POZDRAV!\n");
+    //printf("POZDRAV!\n");
     return 0;               
 }
